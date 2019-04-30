@@ -1,9 +1,8 @@
 # Facebook Semi-structured Data Compression (FBSSDC)
 
-This is a prototype compressor for typed, semi-structured data with an
-example application: compressing JavaScript abstract syntax trees with
-additional data about captured variables, scopes with eval, etc. In
-addition the format supports random access to "lazy" fields.
+This is a prototype compressor for JavaScript source code. It was
+designed for BinAST and uses the FBSSDC technique for compressing
+typed, semi-structured data.
 
 The type of the data being compressed is specified in IDL derived from
 https://github.com/binast/binjs-ref/blob/master/spec/es6.webidl
@@ -199,9 +198,6 @@ encoding repeats.
 
 Tighten probabilities as fields are exhausted.
 
-## Contributing
-
-See the [CONTRIBUTING](CONTRIBUTING.md) file for how to help out.
 
 ## License
 
