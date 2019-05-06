@@ -137,13 +137,13 @@ Caveat: dictionary identity is not checked yet; use the same dictionary as encod
   type_check_parser.add_argument('input', type=argparse.FileType('r'), nargs='+',
                                  help='the AST JSON file to read from')
   type_check_parser.set_defaults(func=lambda args: type_check(args.input))
-  
+
   fix_types_parser = subs.add_parser('fix-types',
                                      help='Repairs AST JSON which has ints for doubles.')
   fix_types_parser.add_argument('input', type=argparse.FileType('r'),
                                 help='the AST JSON file to read from')
   fix_types_parser.set_defaults(func=lambda args: fix_types(args.input))
-  
+
   args = parser.parse_args()
   args.func(args)
 
