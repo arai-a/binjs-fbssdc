@@ -18,8 +18,9 @@ def main():
     parser.set_defaults(func=lambda args: print('use --help to see commands'))
     parser.add_argument('--dir', help='Directory to sample/encode', nargs='+', required=True)
     parser.add_argument('--seed', help='Seed value', default=0, type=int)
-    parser.add_argument('--sample', help='Sample probability', default=0.2, type=float)
+    parser.add_argument('--sampling', help='Sample probability. 0 = no dictionary', default=0.2, type=float)
     parser.add_argument('--binjs_encode', help='Path to binjs_encode', required=True)
+    parser.add_argument('--show_errors', help='Show errors', default=False, type=bool)
     args = parser.parse_args()
 
     sys.setrecursionlimit(10000)
@@ -42,31 +43,43 @@ def main():
     # Walk subdirectories and sort files to dictionary group / control group.
     for root in args.dir:
         for local, _, paths in os.walk(root):
+            if local.find(".git") != -1:
+                # Skip .git subdirectory
+                continue
             for path in paths:
                 print("Let's look at %s" % [path])
-                if rng.random() < args.sample:
-                    dictionary_group.append(os.path.join(local, path))
+                full_path = os.path.join(local, path)
+                if rng.random() < args.sampling:
+                    dictionary_group.append(full_path)
                 else:
-                    control_group.append(os.path.join(local, path))
+                    control_group.append(full_path)
 
     # Prepare dictionary
     print("Preparing dictionary")
     dictionary_sources = []
-    for path in dictionary_group:
-        print("Adding %(path)s to dictionary" % {"path": path})
+    for i, path in enumerate(dictionary_group):
+        print("%(index)d/%(len)d Adding %(path)s to dictionary" % {"path": path, "index": i, "len": len(dictionary_group)})
         proc = subprocess.run([args.binjs_encode, "--quiet", "--show-ast", "-i", path, "-o", "/tmp/binjs"], capture_output=True)
 
         if proc.returncode != 0:
             # Skip if the file somehow can't be processed.
             print("...skipping (cannot parse)")
+            if args.show_errors:
+                print(proc.stderr)
+            continue
+
+        if len(proc.stdout) == 0:
+            # We can't handle empty files.
             continue
 
         try:
             ast = json.loads(proc.stdout)
             float_fixer.rewrite(ty_script, ast)
             dictionary_sources.append((ty_script, ast))
-        except:
+        except Exception as e:
             print("... skipping (cannot process)")
+            if args.show_errors:
+                print(e)
             continue
 
     strings_dictionary = strings.prepare_dict(grammar, dictionary_sources)
@@ -76,8 +89,8 @@ def main():
     print("Compressing with dictionary")
     total_encoded_size = 0
     total_unencoded_brotli_size = 0
-    for path in control_group:
-        print("Compressing %(path)s with dictionary" % {"path": path})
+    for i, path in enumerate(control_group):
+        print("%(index)d/%(len)d Compressing %(path)s with dictionary" % {"path": path, "index": i, "len": len(control_group)})
         TMP_DEST_PATH = "/tmp/encoded.binjs"
 
         # Execute external binjs_encode to parse JavaScript
@@ -85,6 +98,12 @@ def main():
         if proc.returncode != 0:
             # Skip if the file somehow can't be processed.
             print("...skipping (cannot parse)")
+            if args.show_errors:
+                print(proc.stderr)
+            continue
+
+        if len(proc.stdout) == 0:
+            # We can't handle empty files.
             continue
 
         ast = None
@@ -92,8 +111,10 @@ def main():
             # Rewrite integer literals which should be floating point numbers
             ast = json.loads(proc.stdout)
             float_fixer.rewrite(ty_script, ast)
-        except:
+        except Exception as e:
             print("... skipping (cannot process)")
+            if args.show_errors:
+                print(e)
             continue
 
         # Encode file
@@ -113,7 +134,8 @@ def main():
         raw_brotli = proc.stdout
         total_unencoded_brotli_size += len(raw_brotli)
 
-        print("Ratio: %f" % (len(encoded_brotli) / len(raw_brotli)))
+        print("... ratio: %f" % (len(encoded_brotli) / len(raw_brotli)))
+        print("... global ratio so far: %f" % (total_encoded_size / total_unencoded_brotli_size))
 
     print("Run complete")
     print("Global ratio: %f" % (total_encoded_size / total_unencoded_brotli_size))
