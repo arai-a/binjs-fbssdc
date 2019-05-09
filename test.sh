@@ -3,6 +3,7 @@
 set -e
 
 # Integration test for round-tripping a file.
+# Note: On MacOS X, you need to install GNU coreutils (package `coreutils`).
 
 prog_dir=$(dirname $(realpath $0))
 
