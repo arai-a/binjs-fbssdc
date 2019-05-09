@@ -3,6 +3,7 @@
 import struct
 
 # Implementation of vbytes
+# This is a straight port of `varnum.rs` from binjs-ref.
 
 def write(value, out):
     while True:
