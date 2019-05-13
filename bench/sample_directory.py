@@ -21,6 +21,7 @@ def main():
     parser.add_argument('--sampling', help='Sample probability. 0 = no dictionary', default=0.2, type=float)
     parser.add_argument('--binjs_encode', help='Path to binjs_encode', required=True)
     parser.add_argument('--show_errors', help='Show errors', default=False, type=bool)
+    parser.add_argument('--apply-brotli', help='Apply brotli after encoding', default=False, type=bool)
     args = parser.parse_args()
 
     sys.setrecursionlimit(10000)
@@ -122,11 +123,17 @@ def main():
         format.write(grammar, strings_dictionary, ty_script, ast, dest)
         dest.close()
 
-        # Compress encoded version
-        proc = subprocess.run(["brotli", "--stdout", TMP_DEST_PATH, "--best"], capture_output=True)
-        proc.check_returncode()
-        encoded_brotli = proc.stdout
-        total_encoded_size += len(encoded_brotli)
+        len_encoded = 0
+        if args.apply_brotli:
+            # Compress encoded version
+            proc = subprocess.run(["brotli", "--stdout", TMP_DEST_PATH, "--best"], capture_output=True)
+            proc.check_returncode()
+            encoded_brotli = proc.stdout
+            len_encoded = len(encoded_brotli)
+        else:
+            len_encoded = os.stat(TMP_DEST_PATH).st_size
+
+        total_encoded_size += len_encoded
 
         # Compress unencoded version, for comparison
         proc = subprocess.run(["brotli", "--stdout", path, "--best"], capture_output=True)
@@ -134,7 +141,7 @@ def main():
         raw_brotli = proc.stdout
         total_unencoded_brotli_size += len(raw_brotli)
 
-        print("... ratio: %f" % (len(encoded_brotli) / len(raw_brotli)))
+        print("... ratio: %f" % (len_encoded / len(raw_brotli)))
         print("... global ratio so far: %f" % (total_encoded_size / total_unencoded_brotli_size))
 
     print("Run complete")

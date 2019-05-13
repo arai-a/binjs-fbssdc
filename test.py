@@ -17,7 +17,8 @@ import model
 import opt
 import strings
 import tycheck
+import varnum
 
 if __name__ == '__main__':
-  for mod in [bits, strings, idl, ast, tycheck, opt, lazy, model, encode, format]:
+  for mod in [bits, strings, idl, ast, tycheck, opt, lazy, model, encode, varnum, format]:
     doctest.testmod(mod)

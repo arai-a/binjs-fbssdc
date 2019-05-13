@@ -5,8 +5,10 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import brotli
 import doctest
 import io
+import struct
 
 import bits
 import encode
@@ -14,6 +16,14 @@ import lazy
 import model
 import strings
 import tycheck
+
+# The magic header for all (recent) binjs formats.
+MAGIC_HEADER = b"\x89BJS\r\n\0\n"
+
+# The version of the format. binjs-fbssdc implements context-0.1, which is
+# the second released version of the format.
+FORMAT_VERSION = struct.pack('b', 2)
+assert struct.calcsize('b') == 1
 
 def write(types, string_dict, ty, tree, out):
   '''Compresses ast and writes it to a byte stream.
@@ -35,17 +45,23 @@ def write(types, string_dict, ty, tree, out):
   # Check the AST conforms to the IDL.
   tycheck.TypeChecker(types).check_any(ty, tree)
 
-  # Collect the local strings and write the string table
+  out.write(MAGIC_HEADER)
+  out.write(FORMAT_VERSION)
+
+  # The content is brotli-compressed
+  content_no_brotli = io.BytesIO()
+
+  # Collect the local strings
   local_strings = strings.StringCollector(types)
   local_strings.visit(ty, tree)
   local_strings.strings -= set(string_dict)
   local_strings = list(sorted(local_strings.strings))
   string_dict = local_strings + string_dict
-  strings.write_dict(out, local_strings, with_signature=False)
+  strings.write_dict(content_no_brotli, local_strings, with_signature=False)
 
   # Build probability models of the AST and serialize it.
   m = model.model_tree(types, ty, tree)
-  model_writer = encode.ModelWriter(types, string_dict, out)
+  model_writer = encode.ModelWriter(types, string_dict, content_no_brotli)
   model_writer.write(ty, m)
 
   # Now write the file content.
@@ -69,7 +85,10 @@ def write(types, string_dict, ty, tree, out):
     for encoded_part in lazy_encoded:
       out.write(encoded_part.getbuffer())
 
-  write_piece(ty, tree, out)
+  write_piece(ty, tree, content_no_brotli)
+
+  content_compressed = brotli.compress(content_no_brotli.getvalue())
+  out.write(content_compressed)
 
 
 def read(types, string_dict, ty, inp):
@@ -126,15 +145,25 @@ def read(types, string_dict, ty, inp):
   >>> assert json.dumps(tree_in) == json.dumps(tree_out)
   '''
 
-  # Read the local string table
-  local_strings = strings.read_dict(inp, with_signature=False)
+  # Check that we're attempting to decompress a file with the right type.
+  maybe_magic_header = inp.read(len(MAGIC_HEADER))
+  assert maybe_magic_header == MAGIC_HEADER # FIXME: Replace this with a nicer error message.
+
+  maybe_format_version = inp.read(len(FORMAT_VERSION))
+  assert maybe_format_version == FORMAT_VERSION # FIXME: Replace this with a nicer error message.
+
+  # Read and decompress the content
+  content_brotli_compressed = inp.read()
+  content_inp = io.BytesIO(brotli.decompress(content_brotli_compressed))
+
+  local_strings = strings.read_dict(content_inp, with_signature=False)
   string_dict = local_strings + string_dict
 
   # Read the probability models
-  model_reader = encode.ModelReader(types, string_dict, inp)
+  model_reader = encode.ModelReader(types, string_dict, content_inp)
   m = model_reader.read(ty)
 
-  def read_piece(ty):
+  def read_piece(ty, inp):
     tree = encode.decode(types, m, ty, inp)
 
     # Read the dictionary of lazy parts
@@ -148,7 +177,7 @@ def read(types, string_dict, ty, inp):
 
     def restore_lazy_part(ty, attr, index):
       inp.seek(lazy_offsets[index])
-      part = read_piece(attr.resolved_ty)
+      part = read_piece(attr.resolved_ty, inp)
       assert inp.tell() == lazy_offsets[index + 1], f'{inp.tell()}, {lazy_offsets[index + 1]}'
       return part
 
@@ -157,7 +186,7 @@ def read(types, string_dict, ty, inp):
     inp.seek(lazy_offsets[-1])
     return tree
 
-  tree = read_piece(ty)
+  tree = read_piece(ty, content_inp)
   type_checker = tycheck.TypeChecker(types)
   type_checker.check_any(ty, tree)
   return tree
