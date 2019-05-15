@@ -49,11 +49,15 @@ def write_dict(out, strings, with_signature):
   if with_signature:
     out.write(DICT_SIGNATURE)
   bits.write_varint(out, len(strings))
-  for s in strings:
-    encoded = s.encode('utf-8')
-    encoded = re.sub(b'([\x00\x01])', b'\x01\\1', encoded)
-    out.write(encoded)
-    out.write(b'\x00')
+
+  # TODO: Handle lone surrogate.
+  encoded_strings = [s.encode('utf-8') for s in strings]
+
+  for s in encoded_strings:
+    bits.write_varint(out, len(s))
+
+  for s in encoded_strings:
+    out.write(s)
 
 
 def read_dict(inp, with_signature):
@@ -75,18 +79,17 @@ def read_dict(inp, with_signature):
     signature = inp.read(len(DICT_SIGNATURE))
     assert signature == DICT_SIGNATURE, 'signature mismatch: ' + str(signature)
   n_strings = bits.read_varint(inp)
-  strings = []
+
+  lengths = []
   for _ in range(n_strings):
-    buf = bytearray()
-    while True:
-      b = inp.read(1)
-      if b == b'\x01':
-        b = inp.read(1)
-      elif b == b'\x00':
-        break
-      buf.extend(b)
+    lengths.append(bits.read_varint(inp))
+
+  strings = []
+  for length in lengths:
+    buf = inp.read(length)
     s = buf.decode('utf-8')
     strings.append(s)
+
   return strings
 
 
