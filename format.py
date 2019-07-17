@@ -13,6 +13,7 @@ import struct
 import bits
 import encode
 import lazy
+import logger
 import model
 import strings
 import tycheck
@@ -45,11 +46,13 @@ def write(types, string_dict, ty, tree, out):
   # Check the AST conforms to the IDL.
   tycheck.TypeChecker(types).check_any(ty, tree)
 
+  out.comment('Magic header')
   out.write(MAGIC_HEADER)
+  out.comment('Version')
   out.write(FORMAT_VERSION)
 
   # The content is brotli-compressed
-  content_no_brotli = io.BytesIO()
+  content_no_brotli = logger.Logger(io.BytesIO(), out)
 
   # Collect the local strings
   local_strings = strings.StringCollector(types)
@@ -57,28 +60,35 @@ def write(types, string_dict, ty, tree, out):
   local_strings.strings -= set(string_dict)
   local_strings = list(sorted(local_strings.strings))
   string_dict = local_strings + string_dict
+  out.comment_immediate('== strings ==')
   strings.write_dict(content_no_brotli, local_strings, with_signature=False)
 
   # Build probability models of the AST and serialize it.
+  out.comment_immediate('== model ==')
   m = model.model_tree(types, ty, tree)
   model_writer = encode.ModelWriter(types, string_dict, content_no_brotli)
   model_writer.write(ty, m)
 
+  out.comment_immediate('== tree ==')
   # Now write the file content.
   def write_piece(ty, node, out):
+    out.comment('%% piece')
     lazy_parts = lazy.LazyMemberExtractor(types)
     node = lazy_parts.replace(ty, node)
 
     encode.encode(types, m, out, ty, node)
 
+    out.comment_immediate('== lazy ==')
+
     # Encode the lazy parts in memory
     lazy_encoded = []
     for _, attr, part in lazy_parts.lazies:
-      buf = io.BytesIO()
+      buf = logger.Logger(io.BytesIO(), out)
       lazy_encoded.append(buf)
       write_piece(attr.resolved_ty, part, buf)
 
     # Write the dictionary of lazy parts, then the lazy parts
+    out.comment('len(lazy functions)={}'.format(len(lazy_encoded)))
     bits.write_varint(out, len(lazy_encoded))
     for encoded_part in lazy_encoded:
       bits.write_varint(out, encoded_part.tell())
@@ -88,6 +98,7 @@ def write(types, string_dict, ty, tree, out):
   write_piece(ty, tree, content_no_brotli)
 
   content_compressed = brotli.compress(content_no_brotli.getvalue())
+  out.comment_immediate('== compressed {strings,model,tree} ==')
   out.write(content_compressed)
 
 

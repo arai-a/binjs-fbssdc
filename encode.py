@@ -20,7 +20,8 @@ import model
 # tables we need in a consistent order. This does that by following
 # the IDL.
 class ModelExplorer(object):
-  def __init__(self, types):
+  def __init__(self, types, out=None):
+    self.out = out
     self.types = types
     self.queue = []
     self.visited = set()
@@ -33,21 +34,34 @@ class ModelExplorer(object):
       #for i, item in enumerate(self.queue):
       #  print(i, item)
       k = self.queue.pop()
+      if self.out:
+        self.out.comment_immediate('popped "{}.{}"'.format(k[0].name, k[1]))
       self.processed(k, self.process(k))
 
   def enqueue_sym(self, sym):
+    if self.out:
+      self.out.comment_immediate('* symbol "{}"'.format(sym))
     if type(sym) is idl.TyInterface:
       self.enqueue_fields(sym)
+    else:
+      if self.out:
+        self.out.comment_immediate('nothing to do'.format(sym))
     # Primitives, arrays, none, etc. are keys for fields' probability
     # tables; we don't need tables for them specifically.
 
   def enqueue_fields(self, struct_ty):
+    if self.out:
+      self.out.comment_immediate('handling fields for "{}" {{'.format(struct_ty.name))
     for attr in struct_ty.attrs:
       self.enqueue((struct_ty, attr.name))
+    if self.out:
+      self.out.comment_immediate('}')
 
   def enqueue(self, k):
     k = model.map_model_key(self.types, k)
     if k in self.visited:
+      if self.out:
+        self.out.comment_immediate('visited')
       return
     assert k[1] != 'list-length'
     ty = k[0].type_of(k[1])
@@ -56,21 +70,28 @@ class ModelExplorer(object):
       if length_k not in self.visited:
         self.visited.add(length_k)
         # We eagerly get this to see if we need to include the field
-        #print(f'processing length model immediately for {k}')
+        if self.out:
+          self.out.comment_immediate('processing length model immediately for "{}.{}" {{'.format(k[0].name, k[1]))
         length_m = self.process(length_k)
+        if self.out:
+          self.out.comment_immediate('}')
         self.processed(length_k, length_m)
       else:
-        #print(f'already have length model for {k}')
+        if self.out:
+          self.out.comment_immediate('already have length model for "{}.{}"'.format(k[0].name, k[1]))
         length_m = self.tables[length_k]
       if sum(length_m.symbol_to_code.keys()) == 0:
         # All of these are empty.
-        #print(f'all symbols empty for {k}')
+        if self.out:
+          self.out.comment_immediate('all symbols empty for "{}.{}"'.format(k[0].name, k[1]))
         return
       ty = ty.element_ty
     self.visited.add(k)
     if type(ty) is idl.TyInterface:
       self.processed(k, self.trivial(k, ty))
     else:
+      if self.out:
+        self.out.comment_immediate('enqueue "{}.{}"'.format(k[0].name, k[1]))
       self.queue.append(k)
 
   def processed(self, k, m):
@@ -78,9 +99,13 @@ class ModelExplorer(object):
     self.tables[k] = m
     if k[1] == 'list-length':
       return
+    if self.out:
+      self.out.comment_immediate('possible symbols for "{}.{}" {{'.format(k[0].name, k[1]))
     # Now we only explore things with non-zero probability
     for sym in m.in_use_syms():
       self.enqueue_sym(sym)
+    if self.out:
+      self.out.comment_immediate('}')
 
   def trivial(self, k, ty):
     return model.TrivialModel(ty)
@@ -118,7 +143,7 @@ class TestModelExplorer(ModelExplorer):
 
 class ModelWriter(ModelExplorer):
   def __init__(self, types, dictionary, out):
-    super().__init__(types)
+    super().__init__(types, out)
     self.encoder = ModelEncoder(dictionary, out)
 
   def write(self, root_ty, target):
@@ -126,6 +151,13 @@ class ModelWriter(ModelExplorer):
     self.roam(root_ty)
 
   def process(self, k):
+    if self.out:
+      def name_of(ty):
+        if type(ty) is idl.TyInterface:
+          return ty.name
+        return ty
+
+      self.out.comment_immediate('process "{}.{}" {{'.format(name_of(k[0]), k[1]))
     if k[1] == 'list-length':
       ty = idl.TY_LONG
       m = self.target[k]
@@ -137,6 +169,8 @@ class ModelWriter(ModelExplorer):
         m = self.target[k]
     assert type(m) is not model.TrivialModel, 'should be handled by trivial'
     self.encoder.encode_model(ty, m)
+    if self.out:
+      self.out.comment_immediate('}')
     return m
 
 
@@ -217,42 +251,57 @@ class ModelEncoder(object):
     #   print(m.code_to_symbol)
 
     if type(m) is model.UnreachableModel:
+      self.out.comment('UnreachableModel')
       self.out.write(b'\x02')
     elif len(m.symbol_to_code) is 1:
-      #print('single')
+      self.out.comment('Single "{}"'.format(ty))
       self.out.write(b'\x00')
       sym = list(m.code_to_symbol.values())[0]
       if type(m) is model.ExplicitSymbolModel:
+        self.out.comment_immediate('Single ExplicitSymbolModel')
         assert not model.is_indexed_type(ty)
         self.encode_symbol(ty, sym)
         return
       assert type(m) is model.IndexedSymbolModel
+      self.out.comment_immediate('Single IndexedSymbolModel')
       assert model.is_indexed_type(ty)
+      self.out.comment('symbol "{}"={}'.format(sym, m.index[sym]))
       self.encode_index(m.index[sym])
     elif type(m) is model.ExplicitSymbolModel:
-      #print('multiple, explicit')
       assert not model.is_indexed_type(ty)
       # These are not enumerable, we just need to dump the symbols and their lengths.
-      length_sym = list(sorted([(code[1], type(sym) is idl.TyNone and 1 or 2, sym) for code, sym in m.code_to_symbol.items()]))
+      length_sym = list(sorted([(code[1], type(sym) is idl.TyNone and 1 or 2, sym, code[0]) for code, sym in m.code_to_symbol.items()]))
+      self.out.comment('ExplicitSymbolModel "{}" {{'.format(ty))
       self.out.write(b'\x01')
+      self.out.comment('count={}'.format(len(length_sym)))
       bits.write_varint(self.out, len(length_sym))
-      for length, _, _ in length_sym:
+      for length, _, sym, code in length_sym:
         # TODO: In practice lengths are < 32 and we could pack these, etc.
         assert length < 256
+        self.out.comment('symbol "{}"'.format(sym))
+        self.out.comment('code={}, length={}'.format(code, length))
         self.out.write(length.to_bytes(1, byteorder='big'))
-      for _, _, sym in length_sym:
+      self.out.comment_immediate('} {')
+      for _, _, sym, _ in length_sym:
         self.encode_symbol(ty, sym)
+      self.out.comment('}')
     elif type(m) is model.IndexedSymbolModel:
-      #print('multiple, indexed')
+      self.out.comment('IndexedSymbolModel "{}" {{'.format(ty))
       self.out.write(b'\x01')
       assert type(m) is model.IndexedSymbolModel
       assert model.is_indexed_type(ty)
       # These are enumerable
       for i, sym in enumerate(m.symbols):
+        self.out.comment('{}/{}: symbol "{}"'.format(i, len(m.symbols), sym))
         code_length = m.symbol_to_code.get(sym)
+        if code_length:
+          self.out.comment('code={}, length={}'.format(code_length[0], code_length[1]))
+        else:
+          self.out.comment('unused')
         length = code_length and code_length[1] or 0
         assert length < 256
         self.out.write(length.to_bytes(1, byteorder='big'))
+      self.out.comment_immediate('}')
     else:
       assert False, 'unreachable'
 
@@ -262,21 +311,29 @@ class ModelEncoder(object):
   def encode_symbol(self, ty, sym):
     if ty == idl.TY_STRING:
       assert type(sym) is str
+      self.out.comment('TY_STRING')
       bits.write_varint(self.out, self.dictionary[sym])
     elif ty == idl.TY_DOUBLE:
+      self.out.comment('TY_DOUBLE {}'.format(sym))
       self.out.write(struct.pack('!d', sym))
     elif ty == idl.TY_LONG:
+      self.out.comment('TY_LONG {}'.format(sym))
       self.out.write(struct.pack('!l', sym))
     elif ty == idl.TY_UNSIGNED_LONG:
+      self.out.comment('TY_UNSIGNED_LONG {}'.format(sym))
       self.out.write(struct.pack('!L', sym))
     elif ty == idl.TY_BOOLEAN:
+      self.out.comment('TY_BOOLEAN {}'.format(sym))
       self.out.write(int(sym).to_bytes(1, byteorder='big'))
     elif type(ty) is idl.TyFrozenArray:
+      self.out.comment('TyFrozenArray')
       self.encode_symbol(ty.element_ty, sym)
     elif type(ty) is idl.Alt and ty.ty_set == set([idl.TyNone(), idl.TY_STRING]):
       if sym == idl.TyNone():
+        self.out.comment('TyNone')
         bits.write_varint(self.out, 0)
       else:
+        self.out.comment('other "{}"'.format(sym))
         bits.write_varint(self.out, self.dictionary[sym] + 1)
     else:
       assert False, f'unreachable (type should be indexed?) {ty}: {sym}'
@@ -463,6 +520,7 @@ class TreeEncoder(ast.AstVisitor):
   def __init__(self, types, tables, out):
     super().__init__(types)
     self.tables = tables
+    self.logger = out
     self.out = bits.BitsIO(out)
     self.field = []
     self.log = []
@@ -470,10 +528,13 @@ class TreeEncoder(ast.AstVisitor):
   def visit_list(self, ty, xs):
     # TODO: These magic keys need to be kept in sync with model.TreeSharder
     k = (ty, 'list-length')
+    self.logger.comment('{} length={} {{'.format(ty, len(xs)))
     self._write(k, len(xs))
     super().visit_list(ty, xs)
+    self.logger.comment('}')
 
   def visit_struct(self, declared_ty, actual_ty, obj):
+    self.logger.comment('{} {{'.format(actual_ty.name))
     if len(self.field) == 0:
       # This is the root struct, so we don't need to output a tag.
       # FIXME: When the serialized root is not a struct, insinuate a starting model for it.
@@ -481,8 +542,10 @@ class TreeEncoder(ast.AstVisitor):
     else:
       self._write(self.field[-1], actual_ty)
     super().visit_struct(declared_ty, actual_ty, obj)
+    self.logger.comment('}')
 
   def visit_field(self, struct_ty, obj, i, attr):
+    self.logger.comment('field={} {{'.format(attr.name))
     if attr.lazy:
       # Halt the walk here; this will appear in the lazy stream.
       # FIXME: When the ES6 IDL makes these types non-trivial, we may want to
@@ -492,6 +555,7 @@ class TreeEncoder(ast.AstVisitor):
     self.field.append(model.map_model_key(self.types, (struct_ty, attr.name)))
     super().visit_field(struct_ty, obj, i, attr)
     self.field.pop()
+    self.logger.comment('}')
 
   def visit_primitive(self, ty, value):
     if ty is idl.TY_TYPE:
@@ -506,6 +570,8 @@ class TreeEncoder(ast.AstVisitor):
     code, length = m.symbol_to_code[value]
     #print(f'E{len(self.log)}', k, f'{code:b}', length, list(m.symbol_to_code.items()), value)
     self.log.append((effective_key, value))
+    self.out.s.comment('@ value={}'.format(value))
+    self.out.s.comment('@ code={} length={}'.format(code, length))
     for i in range(length):
       self.out.write(1, (code >> (length - i - 1)) & 1)
 

@@ -33,6 +33,7 @@ class BitsIO(object):
     True
     '''
     assert 0 <= value < (1 << count)
+    self.s.comment('@   write count={} bit={}'.format(count, value))
     while count > 0:
       free_bits = 8 - self.used_bits
       self.buf = self.buf | (value << self.used_bits) & 0xff

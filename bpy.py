@@ -14,6 +14,7 @@ import types
 
 import argparse
 import json
+import logger
 import sys
 
 
@@ -22,7 +23,9 @@ def encode(dict_file, in_file, out_file):
   ty_script = types.interfaces['Script']
   string_dict = strings.read_dict(dict_file, with_signature=True)
   proggy = json.loads(in_file.read())
-  format.write(types, string_dict, ty_script, proggy, out_file)
+  out_log = logger.Logger(out_file)
+  format.write(types, string_dict, ty_script, proggy, out_log)
+  out_log.close()
 
 
 def decode(dict_file, in_file, out_file):
@@ -49,7 +52,9 @@ def make_dict(in_files, out_file):
     tycheck.TypeChecker(types).check_any(ty_script, proggy)
     sources.append((ty_script, proggy))
   string_dict = strings.prepare_dict(types, sources)
-  strings.write_dict(out_file, string_dict, with_signature=True)
+  out_log = logger.Logger(out_file)
+  strings.write_dict(out_log, string_dict, with_signature=True)
+  out_log.close()
 
 
 def pretty_json(in_file):

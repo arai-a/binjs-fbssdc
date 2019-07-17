@@ -47,9 +47,14 @@ def prepare_dict(types, sources):
 def write_dict(out, strings, with_signature):
   '''Writes a dictionary from prepare_dict to byte-oriented output.'''
   if with_signature:
+    out.comment('Dictionary signature')
     out.write(DICT_SIGNATURE)
+
+  out.comment('Dictionary length={}'.format(len(strings)))
   bits.write_varint(out, len(strings))
+
   for s in strings:
+    out.comment('string "{}"'.format(s))
     encoded = s.encode('utf-8')
     encoded = re.sub(b'([\x00\x01])', b'\x01\\1', encoded)
     out.write(encoded)
